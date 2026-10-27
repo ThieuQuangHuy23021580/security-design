@@ -147,6 +147,8 @@ http {
         #    roi tong hop thanh mot JSON response.
         # ==================================================================
         location /dashboard {
+            limit_req zone=perip burst=${RATE_LIMIT_BURST} nodelay;
+
             auth_jwt on;
             auth_jwt_require $jwt_has_sub;
 
@@ -165,6 +167,8 @@ http {
         # D) AUTH: /auth/* -> gateway-core (cap / kiem tra JWT) - route public
         # ==================================================================
         location /auth {
+            limit_req zone=perip burst=${RATE_LIMIT_BURST} nodelay;
+
             auth_jwt off;
 
             set $upstream_gateway_core "http://${GATEWAY_CORE_HOST}:${GATEWAY_CORE_PORT}";

@@ -18,7 +18,7 @@ const config = {
   jwt: {
     secret: required('JWT_SECRET'),
     issuer: process.env.JWT_ISSUER ?? 'security-design',
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '3600',
+    expiresIn: Number(process.env.JWT_EXPIRES_IN ?? 3600),
   },
 
   // Token nội bộ dùng để Gateway gọi API /internal/* của các service.

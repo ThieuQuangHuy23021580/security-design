@@ -19,8 +19,11 @@ services:
   # MinIO — luu tru anh dai dien
   #
   # Dung `build` thay vi `image:` vi repo Docker Hub `minio/minio` da bi go bo
-  # (khong con pull duoc). Image duoc build tu binary chinh thuc cua MinIO.
+  # (khong con pull duoc). Image nen: chainguard/minio (MinIO Community).
   # Xem minio/Dockerfile de biet chi tiet.
+  #
+  # Bucket `avatars` do User Service tu tao khi khoi dong
+  # (ensureBucket trong minio.service.js), nen khong can container init.
   # ---------------------------------------------------------------------------
   minio:
     build:
@@ -47,36 +50,6 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
-    networks:
-      - sec-net
-
-  # ---------------------------------------------------------------------------
-  # MinIO Init — tao bucket mot lan roi thoat.
-  # Tach rieng khoi container minio de entrypoint cua minio luon don gian
-  # va container chinh chi chay dung `minio server`.
-  # ---------------------------------------------------------------------------
-  minio-init:
-    build:
-      context: ./minio
-      dockerfile: Dockerfile
-    image: security-design/minio:local
-    container_name: sec-design-minio-init
-    restart: "no"
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-        (mc ls "local/$$MINIO_BUCKET" >/dev/null 2>&1 && echo "[minio-init] Bucket da ton tai." ||
-          mc mb "local/$$MINIO_BUCKET") &&
-        echo "[minio-init] Bucket '$$MINIO_BUCKET' san sang."
     networks:
       - sec-net
 

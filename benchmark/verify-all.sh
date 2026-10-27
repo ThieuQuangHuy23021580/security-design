@@ -99,22 +99,19 @@ check "Token sai chu ky -> 401" \
     "$(http_code "$BASE/users/me" -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1LTEwMDEiLCJpc3MiOiJzZWN1cml0eS1kZXNpZ24ifQ.saisaisaisaisaisaisaisaisaisaisai')" "401"
 check "Token hop le -> 200" "$(http_code "$BASE/users/me" -H "$AUTH")" "200"
 
-# Token het han: tao bang node neu co, neu khong thi bo qua
-if command -v node >/dev/null 2>&1 && [ -d /app ] || command -v node >/dev/null 2>&1; then
-    EXPIRED=$(JWT_SECRET_TEST="${JWT_SECRET:-}" node -e "
+# Token het han: tao bang node trong container gateway-core (da co jsonwebtoken).
+# Dung chinh JWT_SECRET dang chay trong he thong de chu ky hop le, chi co exp la qua khu.
+EXPIRED=$(docker compose exec -T gateway-core node -e "
 const jwt=require('jsonwebtoken');
 console.log(jwt.sign({sub:'u-1001',username:'alice',role:'customer'},
-  process.env.JWT_SECRET_TEST,
-  {algorithm:'HS256',issuer:'security-design',expiresIn:-60}));
-" 2>/dev/null)
-    if [ -n "$EXPIRED" ]; then
-        check "Token het han -> 401" \
-            "$(http_code "$BASE/users/me" -H "Authorization: Bearer $EXPIRED")" "401"
-    else
-        log "  [SKIP] Khong tao duoc token het han (thieu thu vien jsonwebtoken tren host)."
-    fi
+  process.env.JWT_SECRET,
+  {algorithm:'HS256',issuer:process.env.JWT_ISSUER||'security-design',expiresIn:-60}));
+" 2>/dev/null | tr -d '\r')
+if [ -n "$EXPIRED" ]; then
+    check "Token het han (chu ky dung, exp qua khu) -> 401" \
+        "$(http_code "$BASE/users/me" -H "Authorization: Bearer $EXPIRED")" "401"
 else
-    log "  [SKIP] Khong co node tren host de tao token het han."
+    log "  [SKIP] Khong tao duoc token het han."
 fi
 
 # -----------------------------------------------------------------------------
@@ -170,7 +167,14 @@ check_re "Phuong thuc la PUT" "$PRESIGN" '"method":"PUT"'
 check_re "Het han sau 300 giay" "$PRESIGN" '"expiresIn":300'
 check_re "Object nam trong thu muc cua user tu JWT" "$PRESIGN" 'avatars/u-1001/'
 check_re "URL dung endpoint cong khai (localhost:9000)" "$PRESIGN" 'http://localhost:9000'
-check_re "Khong lo thong tin xac thuc MinIO (khong co secret key)" "$PRESIGN" '^((?!minioadmin123).)*$'
+# Khong duoc lo secret key MinIO trong response.
+if printf '%s' "$PRESIGN" | grep -q 'minioadmin123'; then
+    log "  [FAIL] Response co chua MINIO secret key!"
+    FAIL=$((FAIL + 1))
+else
+    log "  [PASS] Khong lo thong tin xac thuc MinIO trong response"
+    PASS=$((PASS + 1))
+fi
 
 UPLOAD_URL=$(printf '%s' "$PRESIGN" | sed -n 's/.*"uploadUrl":"\([^"]*\)".*/\1/p')
 OBJECT=$(printf '%s' "$PRESIGN" | sed -n 's/.*"objectName":"\([^"]*\)".*/\1/p')

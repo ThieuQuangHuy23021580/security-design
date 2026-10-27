@@ -19,13 +19,11 @@ const config = {
   jwt: {
     secret: required('JWT_SECRET'),
     issuer: process.env.JWT_ISSUER ?? 'security-design',
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '3600',
+    expiresIn: Number(process.env.JWT_EXPIRES_IN ?? 3600),
   },
 
   minio: {
-    // Endpoint nội bộ: User Service gọi MinIO bằng địa chỉ trong mạng Docker.
     internalEndpoint: process.env.MINIO_INTERNAL_ENDPOINT ?? 'http://minio:9000',
-    // Endpoint công khai: dùng để KÝ pre-signed URL mà client ngoài Docker truy cập được.
     publicEndpoint: process.env.MINIO_PUBLIC_ENDPOINT ?? 'http://localhost:9000',
     accessKey: required('MINIO_ROOT_USER', 'minioadmin'),
     secretKey: required('MINIO_ROOT_PASSWORD', 'minioadmin123'),
