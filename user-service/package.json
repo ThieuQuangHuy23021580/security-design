@@ -1,0 +1,16 @@
+{
+  "name": "user-service",
+  "version": "1.0.0",
+  "description": "User Service - quản lý người dùng và cấp pre-signed URL tải ảnh đại diện lên MinIO",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "minio": "^8.0.2"
+  }
+}
