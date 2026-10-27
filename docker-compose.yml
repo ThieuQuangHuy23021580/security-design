@@ -1,0 +1,219 @@
+# ==============================================================================
+# API Gateway + User Service + Order Service + MinIO
+#
+# Chay toan bo he thong bang mot lenh:
+#     docker compose up -d --build
+#
+# Chi cong cong khai:
+#   - 8080 : API Gateway (client goi qua cong nay)
+#   - 9000 : MinIO (client PUT anh truc tiep)
+#   - 9001 : MinIO Console (giao dien quan tri)
+#
+# User Service / Order Service KHONG duoc publish cong -> khong the go truc tiep
+# tu host, chi nội bộ trong Docker network. Rieng cong 8081 (bench) cua Gateway
+# cung khong publish, chi dung o trong network cho k6.
+# ==============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MinIO — luu tru anh dai dien
+  #
+  # Dung `build` thay vi `image:` vi repo Docker Hub `minio/minio` da bi go bo
+  # (khong con pull duoc). Image duoc build tu binary chinh thuc cua MinIO.
+  # Xem minio/Dockerfile de biet chi tiet.
+  # ---------------------------------------------------------------------------
+  minio:
+    build:
+      context: ./minio
+      dockerfile: Dockerfile
+    image: security-design/minio:local
+    container_name: sec-design-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      # Client tren may host PUT anh truc tiep vao MinIO qua cong 9000.
+      - "${MINIO_PORT:-9000}:9000"
+      # Console quan tri.
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # MinIO co san endpoint health chuan: /minio/health/live
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - sec-net
+
+  # ---------------------------------------------------------------------------
+  # MinIO Init — tao bucket mot lan roi thoat.
+  # Tach rieng khoi container minio de entrypoint cua minio luon don gian
+  # va container chinh chi chay dung `minio server`.
+  # ---------------------------------------------------------------------------
+  minio-init:
+    build:
+      context: ./minio
+      dockerfile: Dockerfile
+    image: security-design/minio:local
+    container_name: sec-design-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        (mc ls "local/$$MINIO_BUCKET" >/dev/null 2>&1 && echo "[minio-init] Bucket da ton tai." ||
+          mc mb "local/$$MINIO_BUCKET") &&
+        echo "[minio-init] Bucket '$$MINIO_BUCKET' san sang."
+    networks:
+      - sec-net
+
+  # ---------------------------------------------------------------------------
+  # User Service
+  # ---------------------------------------------------------------------------
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: sec-design-user-service
+    restart: unless-stopped
+    environment:
+      PORT: ${USER_SERVICE_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      # Token nội bộ dùng để Gateway gọi /internal/* của service.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      MINIO_INTERNAL_ENDPOINT: ${MINIO_INTERNAL_ENDPOINT}
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_PRESIGN_EXPIRY: ${MINIO_PRESIGN_EXPIRY}
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - sec-net
+    # KHONG publish cong: service chi nhin thay trong Docker network.
+
+  # ---------------------------------------------------------------------------
+  # Order Service
+  # ---------------------------------------------------------------------------
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: sec-design-order-service
+    restart: unless-stopped
+    environment:
+      PORT: ${ORDER_SERVICE_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+    networks:
+      - sec-net
+    # KHONG publish cong: service chi nhin thay trong Docker network.
+
+  # ---------------------------------------------------------------------------
+  # Gateway Core — lớp aggregation (gọi song song User + Order Service)
+  # ---------------------------------------------------------------------------
+  gateway-core:
+    build:
+      context: ./gateway/gateway-core
+      dockerfile: Dockerfile
+    container_name: sec-design-gateway-core
+    restart: unless-stopped
+    environment:
+      PORT: ${GATEWAY_CORE_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      USER_SERVICE_URL: http://${USER_SERVICE_HOST}:${USER_SERVICE_PORT}
+      ORDER_SERVICE_URL: http://${ORDER_SERVICE_HOST}:${ORDER_SERVICE_PORT}
+      GATEWAY_TIMEOUT_MS: ${GATEWAY_TIMEOUT_MS:-3000}
+    depends_on:
+      - user-service
+      - order-service
+    networks:
+      - sec-net
+    # KHONG publish cong: gateway-core chi nhin thay trong Docker network.
+
+  # ---------------------------------------------------------------------------
+  # API Gateway — Nginx (routing + JWT + rate limiting + aggregation)
+  # ---------------------------------------------------------------------------
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: sec-design-gateway
+    restart: unless-stopped
+    environment:
+      # Biến được dùng trong nginx.conf.template (render bằng envsubst).
+      GATEWAY_PORT: ${GATEWAY_PORT}
+      RATE_LIMIT_RATE: ${RATE_LIMIT_RATE}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_HOST: ${USER_SERVICE_HOST}
+      USER_SERVICE_PORT: ${USER_SERVICE_PORT}
+      ORDER_SERVICE_HOST: ${ORDER_SERVICE_HOST}
+      ORDER_SERVICE_PORT: ${ORDER_SERVICE_PORT}
+      GATEWAY_CORE_HOST: ${GATEWAY_CORE_HOST}
+      GATEWAY_CORE_PORT: ${GATEWAY_CORE_PORT}
+      # Chỉ cho phép envsubst thay thế đúng các biến trên.
+      # (Nếu không giới hạn, các biến nginx như $host sẽ bị xóa mất.)
+      NGINX_ENVSUBST_FILTER: "^(GATEWAY_PORT|RATE_LIMIT_RATE|RATE_LIMIT_BURST|JWT_SECRET|USER_SERVICE_HOST|USER_SERVICE_PORT|ORDER_SERVICE_HOST|ORDER_SERVICE_PORT|GATEWAY_CORE_HOST|GATEWAY_CORE_PORT)$$"
+    ports:
+      # Cổng public duy nhất cho mọi API.
+      - "${GATEWAY_PORT}:${GATEWAY_PORT}"
+    depends_on:
+      - gateway-core
+      - user-service
+      - order-service
+    networks:
+      - sec-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:${GATEWAY_PORT}/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # k6 — chay benchmark (dung lenh: docker compose run --rm k6 ...)
+  # ---------------------------------------------------------------------------
+  k6:
+    image: grafana/k6:latest
+    container_name: sec-design-k6
+    profiles: ["bench"]
+    working_dir: /benchmark
+    volumes:
+      - ./benchmark:/benchmark:ro
+    networks:
+      - sec-net
+    # Chay lenh benchmark da chi dinh, vi du:
+    #   docker compose --profile bench run --rm k6 run /benchmark/user-service.js
+    entrypoint: ["k6"]
+
+networks:
+  sec-net:
+    driver: bridge
+    name: sec-design-net
+
+volumes:
+  minio-data:
+    name: sec-design-minio-data
